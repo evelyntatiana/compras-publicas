@@ -19,7 +19,6 @@ Aplicación interactiva desarrollada con **Python y Streamlit** para consultar, 
 - NumPy
 - Requests
 - Plotly
-- Matplotlib
 - Prophet
 - Scikit-learn
 
@@ -55,8 +54,19 @@ La ejecución local abre la aplicación en tu equipo. Este README no incluye una
 
 - La interfaz permite consultar años entre 2015 y 2025; la disponibilidad efectiva depende de la API.
 - Incluye ejercicios de regresión, clasificación, agrupamiento y series temporales. Sus resultados son exploratorios y dependen de los datos recuperados.
-- Si la respuesta no contiene `month` ni `date`, el procesamiento asigna meses de forma cíclica según la posición de las filas. Esos meses no representan fechas observadas y no deben usarse para concluir tendencias temporales ni validar pronósticos.
-- Si falta `contracts`, el procesamiento asigna el valor 1 por fila; ese valor no acredita la cantidad real de contratos.
+- Los meses ausentes, no enteros o fuera del rango 1–12 se conservan como faltantes. Una fecha completa válida permite obtener el mes y el año; nunca se generan meses según el orden de las filas.
+- Los gráficos temporales separan cada combinación de año y mes. Los registros sin fecha válida se excluyen de esas vistas, pero conservan sus montos para los totales generales.
+- En consultas anuales, el año consultado aporta el contexto cuando no existe una fecha completa. Los pronósticos usan únicamente meses observados y se presentan como ejercicios exploratorios.
+- La cantidad de contratos ausente o inválida se conserva como faltante; no se sustituye por 1. Los análisis que la requieren omiten esos registros.
+- Los modelos necesitan suficientes observaciones válidas. Las métricas de regresión y clasificación proceden de una división aleatoria y no validan capacidad de pronóstico futuro.
+
+## Comprobaciones
+
+```bash
+python -m unittest discover -p "test_*.py" -v
+```
+
+Las pruebas cubren fechas ausentes e inválidas, separación entre años, cantidades faltantes y conservación de los datos originales.
 
 ## Propósito
 

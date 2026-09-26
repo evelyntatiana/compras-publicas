@@ -13,16 +13,14 @@ import json                   #  Trabaja con datos en formato JSON (muy usado en
 
 # Visualización de gráficos
 import plotly.express as px   #  Crea gráficos interactivos (líneas, barras, mapas, etc.).
-import matplotlib.pyplot as plt  #  Genera gráficos estáticos y personalizables.
+# import matplotlib.pyplot as plt  #  Genera gráficos estáticos y personalizables.
        #  Estilo más bonito para los gráficos de matplotlib.
 
 # Manejo de fechas y tiempo
-import calendar               #  Permite trabajar con fechas, meses, años, etc.
-from datetime import datetime #  Para convertir cadenas de texto en fechas.  
 import warnings               #  Sirve para ocultar advertencias del sistema.
 
 # Modelos de predicción
-from prophet import Prophet   #  Modelo para hacer predicciones en series de tiempo.
+# from prophet import Prophet   #  Modelo para hacer predicciones en series de tiempo.
 from sklearn.cluster import KMeans                     #  Agrupa datos similares (clustering).
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier  #  Modelos de predicción tipo "bosque aleatorio".
 from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, confusion_matrix  #  Evalúan si el modelo es bueno o no.
@@ -144,69 +142,14 @@ def obtener_datos(year, provincia, tipo):
     except Exception as e:
         return None, str(e)  # Cualquier otro error inesperado
 
-# Limpia, transforma y prepara los datos para análisis o visualización
-def limpiar_datos(df):
-    if df is None or df.empty:
-        return None, "No hay datos para procesar"  # Verifica que haya datos
-
-    try:
-        df_clean = df.copy()  # Copia los datos originales para no modificarlos directamente
-
-        # Diccionario para cambiar nombres de columnas a nombres estándar
-        column_mapping = {
-            'monto': 'total', 'amount': 'total', 'valor': 'total',
-            'tipo': 'internal_type', 'type': 'internal_type', 'categoria': 'internal_type',
-            'contratos': 'contracts', 'cantidad': 'contracts', 'count': 'contracts',
-            'mes': 'month', 'fecha': 'date'
-        }
-
-        # Renombra columnas si es necesario
-        for old_name, new_name in column_mapping.items():
-            if old_name in df_clean.columns and new_name not in df_clean.columns:
-                df_clean[new_name] = df_clean[old_name]
-
-        # Convierte las columnas numéricas a tipo adecuado
-        for col in ['total', 'contracts', 'month']:
-            if col in df_clean.columns:
-                df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
-
-        # Extrae el mes desde la fecha si no existe la columna 'month'
-        if 'month' not in df_clean.columns:
-            if 'date' in df_clean.columns:
-                df_clean['date'] = pd.to_datetime(df_clean['date'], errors='coerce')
-                df_clean['month'] = df_clean['date'].dt.month
-            else:
-                df_clean['month'] = (df_clean.index % 12) + 1  # Asigna meses aleatorios si no hay fecha
-
-        # Elimina filas con valores nulos o cero en la columna 'total'
-        if 'total' in df_clean.columns:
-            df_clean = df_clean.dropna(subset=['total'])
-            df_clean = df_clean[df_clean['total'] > 0]
-
-        # Elimina registros con tipo de contratación vacío
-        if 'internal_type' in df_clean.columns:
-            df_clean = df_clean.dropna(subset=['internal_type'])
-            df_clean = df_clean[df_clean['internal_type'].str.strip() != '']
-
-        # Si no hay columna de cantidad de contratos, la crea con valor 1
-        if 'contracts' not in df_clean.columns:
-            df_clean['contracts'] = 1
-
-        if df_clean.empty:
-            return None, "No quedan datos válidos"  # Verifica que haya datos útiles
-
-        return df_clean, None  # Retorna el DataFrame limpio y sin errores
-    except Exception as e:
-        return None, f"Error limpiando datos: {str(e)}"  # Error inesperado durante la limpieza
-
-
-
-
-
+from data_processing import limpiar_datos, serie_mensual
 
 # Paso 4. Consultar Datos 
 # Cuando el usuario presiona el botón en la barra lateral para consultar datos
 if st.sidebar.button("🔄 Consultar Datos", type="primary"):
+
+    st.session_state.df_data = None
+    st.session_state.last_query = None
 
     # Muestra un mensaje mientras se cargan los datos
     with st.spinner("Consultando datos de la API..."):
@@ -253,6 +196,9 @@ if st.sidebar.button("🔄 Consultar Datos", type="primary"):
             if error:
                 st.error(f"❌ {error}")  # Muestra error si no se pudo obtener datos
             else:
+                df = df.copy()
+                if 'anio' not in df.columns:
+                    df['anio'] = year
                 df_clean, clean_error = limpiar_datos(df)  # Limpia los datos
 
                 if clean_error:
@@ -284,6 +230,15 @@ if st.session_state.df_data is not None:
         )
 
     df_clean = st.session_state.df_data
+    df_contratos = df_clean.dropna(subset=['contracts'])
+    sin_mes = int(df_clean['month'].isna().sum())
+    if sin_mes:
+        st.warning(f'{sin_mes} registros sin mes válido: se excluyen de gráficos temporales y modelos que requieren el mes.')
+    sin_fecha = int(df_clean[['anio', 'month']].isna().any(axis=1).sum())
+    if sin_fecha > sin_mes:
+        st.warning(f'{sin_fecha} registros no tienen año y mes válidos; la evolución temporal usa solo los registros fechados.')
+    if df_clean['contracts'].isna().any():
+        st.info('Los registros sin cantidad de contratos válida se excluyen de los análisis de contratos; no se reemplazan por 1.')
 
     # Título de la sección de visualización
     st.markdown("## 📊 Visualización de Datos")
@@ -309,79 +264,69 @@ if st.session_state.df_data is not None:
                 title="Totales por Tipo de Contratación",
                 labels={'internal_type': 'Tipo de Contratación', 'total': 'Monto Total ($)'}
             )
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar)
 
     # Pestaña 2: Gráfico de líneas que muestra la evolución mensual del monto total
     with tabs_vis[1]:
         st.subheader("Gráfica de Líneas: Evolución Mensual de Montos Totales")
-        if 'month' in df_clean.columns and 'total' in df_clean.columns:
-            df_line = df_clean.groupby('month')['total'].sum().reset_index()
-            df_line['mes'] = df_line['month'].apply(lambda x: calendar.month_name[x])  # Nombre del mes
-            fig_line = px.line(
-                df_line, 
-                x='mes', 
-                y='total', 
-                title="Evolución Mensual del Monto Total",
-                labels={'mes': 'Mes', 'total': 'Monto Total ($)'},
-                markers=True
-            )
-            st.plotly_chart(fig_line, use_container_width=True)
+        mensual = serie_mensual(df_clean)
+        if not mensual.empty:
+            fig_line = px.line(mensual, x='ds', y='y', markers=True,
+                               title='Montos por mes calendario observado',
+                               labels={'ds': 'Mes y año', 'y': 'Monto total ($)'})
+            st.plotly_chart(fig_line)
+        else:
+            st.info('No hay fechas completas válidas para mostrar una evolución temporal.')
 
     # Pestaña 3: Gráfico de pastel que representa la proporción de contratos por tipo
     with tabs_vis[2]:
         st.subheader("Gráfica de Pastel: Proporción de Contratos por Tipo")
-        if 'internal_type' in df_clean.columns and 'contracts' in df_clean.columns:
-            df_pie = df_clean.groupby('internal_type')['contracts'].sum().reset_index()
+        if 'internal_type' in df_clean.columns and not df_contratos.empty:
+            df_pie = df_contratos.groupby('internal_type')['contracts'].sum().reset_index()
             fig_pie = px.pie(
                 df_pie, 
                 values='contracts', 
                 names='internal_type',
                 title="Proporción de Contratos por Tipo"
             )
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie)
 
     # Pestaña 4: Gráfico de dispersión entre contratos y monto total
     with tabs_vis[3]:
         st.subheader("Gráfica de Dispersión: Relación Total vs Contratos")
-        if 'contracts' in df_clean.columns and 'total' in df_clean.columns:
+        if not df_contratos.empty:
             fig_disp = px.scatter(
-                df_clean, 
+                df_contratos, 
                 x='contracts', 
                 y='total', 
                 color='internal_type' if 'internal_type' in df_clean.columns else None,
                 title="Relación entre Total y Cantidad de Contratos",
                 labels={'contracts': 'Contratos', 'total': 'Monto Total ($)'}
             )
-            st.plotly_chart(fig_disp, use_container_width=True)
+            st.plotly_chart(fig_disp)
 
     # Pestaña 5: Línea por mes y tipo de contratación
     with tabs_vis[4]:
         st.subheader("Gráfica de Línea: Tipos de Contrato por Mes")
-        if all(col in df_clean.columns for col in ['month', 'internal_type', 'total']):
-            df_tipo_mes = df_clean.groupby(['month', 'internal_type'])['total'].sum().reset_index()
-            fig_tipo_mes = px.line(
-                df_tipo_mes, 
-                x='month', 
-                y='total', 
-                color='internal_type',
-                title="Tipos de Contrato por Mes",
-                labels={'month': 'Mes', 'total': 'Monto Total ($)', 'internal_type': 'Tipo'},
-                markers=True
-            )
-            fig_tipo_mes.update_xaxes(tickmode='linear', dtick=1)
-            st.plotly_chart(fig_tipo_mes, use_container_width=True)
-       
+        df_tipo = df_clean.dropna(subset=['anio', 'month', 'total']).copy()
+        if 'internal_type' in df_tipo.columns and not df_tipo.empty:
+            df_tipo['fecha'] = pd.to_datetime(dict(year=df_tipo['anio'].astype(int),
+                                                  month=df_tipo['month'].astype(int), day=1))
+            df_tipo_mes = df_tipo.groupby(['fecha', 'internal_type'], as_index=False)['total'].sum()
+            fig_tipo_mes = px.line(df_tipo_mes, x='fecha', y='total', color='internal_type',
+                                  title='Montos por tipo y mes calendario',
+                                  labels={'fecha': 'Mes y año', 'total': 'Monto total ($)', 'internal_type': 'Tipo'})
+            st.plotly_chart(fig_tipo_mes)
+        else:
+            st.info('No hay fechas completas y tipos de contratación para este gráfico.')
 
 
-
-    
-import seaborn as sns
+# import seaborn as sns
 
 if st.session_state.df_data is not None:
     df_modelos = st.session_state.df_data.copy()
-    if 'anio' not in df_modelos.columns and 'date' in df_modelos.columns:
-        df_modelos['date'] = pd.to_datetime(df_modelos['date'], errors='coerce')
-        df_modelos['anio'] = df_modelos['date'].dt.year
+    df_modelos = df_modelos.dropna(subset=['month', 'contracts', 'total']).copy()
+    st.caption('Los modelos son ejercicios exploratorios; una división aleatoria no valida pronósticos futuros.')
     st.markdown("---")
     st.header("🤖 Modelos Analíticos y Predictivos")
 
@@ -390,7 +335,7 @@ if st.session_state.df_data is not None:
     # --- REGRESIÓN ---
     with tabs_modelos[0]:
         st.subheader("📈 Predicción del Monto Total")
-        if all(col in df_modelos.columns for col in ['contracts', 'total', 'month']):
+        if len(df_modelos) >= 5:
             df_reg = df_modelos[['contracts', 'month', 'total']].dropna()
             X = df_reg[['contracts', 'month']]
             y = df_reg['total']
@@ -406,55 +351,62 @@ if st.session_state.df_data is not None:
 
             fig_reg = px.scatter(x=y_test, y=y_pred, labels={'x': 'Valor Real', 'y': 'Predicción'},
                                  title="Predicción vs Valor Real")
-            st.plotly_chart(fig_reg, use_container_width=True)
+            st.plotly_chart(fig_reg)
         else:
-            st.warning("Faltan columnas necesarias para la regresión")
+            st.warning("Se necesitan al menos 5 registros con mes, contratos y monto válidos para la regresión")
 
     # --- CLASIFICACIÓN ---
     with tabs_modelos[1]:
         st.subheader("🔍 Clasificación del Monto Total")
-        df_clas = df_modelos[['contracts', 'month', 'total']].dropna().copy()
-        df_clas['categoria'] = pd.cut(df_clas['total'], bins=[0, 10000, 100000, np.inf],
-                                       labels=['Bajo', 'Medio', 'Alto'])
-        X = df_clas[['contracts', 'month']]
-        y = df_clas['categoria']
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-
-        model_clf = RandomForestClassifier(n_estimators=100, random_state=42)
-        model_clf.fit(X_train, y_train)
-        y_pred = model_clf.predict(X_test)
-
-        st.write(f"Accuracy: {accuracy_score(y_test, y_pred):.2f}")
-        cm = confusion_matrix(y_test, y_pred, labels=['Bajo', 'Medio', 'Alto'])
-        st.write("Matriz de Confusión:")
-        st.dataframe(pd.DataFrame(cm, index=['Bajo', 'Medio', 'Alto'], columns=['Bajo', 'Medio', 'Alto']))
+        if len(df_modelos) >= 5:
+            df_clas = df_modelos[['contracts', 'month', 'total']].dropna().copy()
+            df_clas['categoria'] = pd.cut(df_clas['total'], bins=[0, 10000, 100000, np.inf],
+                                           labels=['Bajo', 'Medio', 'Alto'])
+            X = df_clas[['contracts', 'month']]
+            y = df_clas['categoria']
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+    
+            model_clf = RandomForestClassifier(n_estimators=100, random_state=42)
+            model_clf.fit(X_train, y_train)
+            y_pred = model_clf.predict(X_test)
+    
+            st.write(f"Accuracy: {accuracy_score(y_test, y_pred):.2f}")
+            cm = confusion_matrix(y_test, y_pred, labels=['Bajo', 'Medio', 'Alto'])
+            st.write("Matriz de Confusión:")
+            st.dataframe(pd.DataFrame(cm, index=['Bajo', 'Medio', 'Alto'], columns=['Bajo', 'Medio', 'Alto']))
+        else:
+            st.info('Se necesitan al menos 5 registros válidos para la clasificación.')
 
     # --- CLUSTERING ---
     with tabs_modelos[2]:
         st.subheader("📊 Agrupamiento por Comportamiento de Contratación")
-        df_clust = df_modelos[['contracts', 'month', 'total']].dropna()
-        kmeans = KMeans(n_clusters=3, random_state=42)
-        df_clust['cluster'] = kmeans.fit_predict(df_clust)
-        fig_cluster = px.scatter(df_clust, x='contracts', y='total', color='cluster',title="Clústeres de Contrataciones")
-        st.plotly_chart(fig_cluster, use_container_width=True)
+        if len(df_modelos[['contracts', 'month', 'total']].drop_duplicates()) >= 3:
+            df_clust = df_modelos[['contracts', 'month', 'total']].dropna()
+            kmeans = KMeans(n_clusters=3, random_state=42)
+            df_clust['cluster'] = kmeans.fit_predict(df_clust)
+            fig_cluster = px.scatter(df_clust, x='contracts', y='total', color='cluster',title="Clústeres de Contrataciones")
+            st.plotly_chart(fig_cluster)
+        else:
+            st.info('Se necesitan al menos 3 observaciones distintas y válidas para el agrupamiento.')
 
     # --- SERIES TEMPORALES ---
     with tabs_modelos[3]:
         st.subheader("⏳ Predicción de Montos con Prophet")
-        if 'anio' in df_modelos.columns and 'month' in df_modelos.columns:
-            df_ts = df_modelos.groupby(['anio', 'month'])['total'].sum().reset_index()
-            df_ts['fecha'] = pd.to_datetime(df_ts['anio'].astype(str) + '-' + df_ts['month'].astype(str) + '-01')
-            df_ts = df_ts[['fecha', 'total']].rename(columns={'fecha': 'ds', 'total': 'y'})
-            df_ts = df_ts[df_ts['y'] > 0]
-
-            modelo_prophet = Prophet()
-            modelo_prophet.fit(df_ts)
-
-            futuro = modelo_prophet.make_future_dataframe(periods=6, freq='M')
-            forecast = modelo_prophet.predict(futuro)
-
-            fig_prophet = px.line(forecast, x='ds', y='yhat', title="Predicción de Montos Futuros")
-            st.plotly_chart(fig_prophet, use_container_width=True)
+        df_ts = serie_mensual(st.session_state.df_data)
+        if len(df_ts) < 2:
+            st.info('Se necesitan al menos 2 meses observados con año y mes válidos para ajustar una serie temporal.')
         else:
-            st.warning("Se necesitan columnas 'anio' y 'month' para construir la serie temporal")
-
+            if len(df_ts) < 12:
+                st.warning('Hay menos de 12 meses observados. El pronóstico es solo una demostración exploratoria.')
+            try:
+                from prophet import Prophet
+                modelo_prophet = Prophet()
+                modelo_prophet.fit(df_ts)
+                futuro = modelo_prophet.make_future_dataframe(periods=6, freq='MS')
+                forecast = modelo_prophet.predict(futuro)
+                fig_prophet = px.line(forecast, x='ds', y='yhat', title='Proyección exploratoria de montos')
+                st.plotly_chart(fig_prophet)
+            except ImportError:
+                st.warning('Instala las dependencias de requirements.txt para habilitar Prophet.')
+            except ValueError as exc:
+                st.warning(f'No se pudo ajustar el modelo temporal con estos datos: {exc}')
